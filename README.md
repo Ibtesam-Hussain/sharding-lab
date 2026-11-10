@@ -1,6 +1,6 @@
 # sharding-lab
 
-A hands-on database sharding project: a Node.js API that routes data across multiple PostgreSQL shards, seeded with millions of rows and (planned) load-tested in the cloud to compare **1 database vs 2 vs 4 shards**.
+A hands-on database sharding project: a Node.js API that routes data across multiple PostgreSQL shards, seeded with millions of rows and load-tested with k6 to compare **1 database vs 2 vs 4 shards**, different routing strategies, and uniform vs skewed traffic.
 
 ## Why sharding
 
@@ -37,7 +37,8 @@ k6 virtual users → Node/Fastify API (shard router) → Postgres shard 0..3
 - **Node.js 20.6+**, TypeScript, **Fastify**
 - **pg** (one `Pool` per shard), **pg-copy-streams** (bulk loading), **prom-client**
 - **PostgreSQL 16** in Docker Compose (1 baseline + 4 shards, each limited to 1 CPU / 1GB RAM)
-- **k6** for load testing (planned), **Prometheus + Grafana** (planned)
+- **k6** for load testing
+- **Prometheus + Grafana** (optional, for live dashboards)
 - Cloud (AWS or GCP VMs) for the real benchmarks (planned)
 
 ## Project structure
@@ -52,7 +53,9 @@ sharding-lab/
 ├── scripts/
 │   └── seed.ts                  # bulk seeder (goes through the router)
 ├── loadtest/
-│   └── k6.js                    # load test script (planned, Step 5)
+│   └── k6.js                    # load test: ramp, steady, spike; uniform/zipf/hot keys
+├── results/                     # k6 summary exports (JSON)
+├── monitoring/                  # optional: prometheus.yml, grafana-datasource.yml
 └── src/
     ├── config.ts
     ├── metrics.ts
@@ -74,8 +77,8 @@ Planned: range and directory routers.
 
 - Node 20.6 or newer (`node -v`)
 - Docker Desktop (WSL 2 backend on Windows)
+- k6 (`winget install k6 --source winget`)
 - `psql` and/or pgAdmin 4 (optional, for inspecting data)
-- k6 (needed from Step 5)
 
 ### Install
 
@@ -98,15 +101,18 @@ npm i -D @types/pg-copy-streams
 
 ```
 PORT=3000
-STRATEGY=hash            # hash | consistent
+STRATEGY=consistent      # hash | consistent
 POOL_SIZE=20
 SHARD_URLS=postgres://app:app@localhost:5441/app,postgres://app:app@localhost:5442/app,postgres://app:app@localhost:5443/app,postgres://app:app@localhost:5444/app
 
-# Baseline run (single DB, same code path): use this instead
+# 1 DB baseline (single URL, same code path)
 # SHARD_URLS=postgres://app:app@localhost:5440/app
+
+# 2 shards
+# SHARD_URLS=postgres://app:app@localhost:5441/app,postgres://app:app@localhost:5442/app
 ```
 
-A baseline run is just one URL in `SHARD_URLS`. The router always returns shard 0, so 1-DB vs 4-shard comparisons run the same code.
+A baseline run is just one URL in `SHARD_URLS`. The router always returns shard 0, so 1-DB vs sharded comparisons run the same code.
 
 ### Database credentials and ports
 
@@ -133,7 +139,7 @@ docker compose ps
 npm run dev
 ```
 
-Expected: `API :3000 | strategy=hash | shards=4`. The baseline is started only when needed (`docker compose up -d pg-baseline`) to save RAM.
+Expected: `API :3000 | strategy=consistent | shards=4`. The baseline is started only when needed (`docker compose up -d pg-baseline`) to save RAM.
 
 Smoke test (PowerShell):
 
@@ -146,8 +152,6 @@ $r
 Invoke-RestMethod "http://localhost:3000/users/$($r.id)"
 Invoke-RestMethod "http://localhost:3000/debug/route/$($r.id)"   # shard must match the POST response
 ```
-
-Passing result: the row exists only on the shard the API reported, and a batch of inserts spreads roughly evenly across the shards.
 
 ### Step 4: seed the shards
 
@@ -164,7 +168,54 @@ npm run seed
 
 `npm run seed` seeds 1,000,000 rows by default. The API's new ids start at 10^12, so inserts from the API never collide with seeded ids 1..N.
 
-**Whenever you change `STRATEGY`:** truncate, update `.env`, restart the API, and re-seed. Data placed by one strategy is only readable under that same strategy.
+**Whenever you change `STRATEGY` or the shard list:** truncate, update `.env`, re-seed, and restart the API. Data placed by one configuration is only readable under that same configuration.
+
+### Step 5: load test with k6
+
+`loadtest/k6.js` sends HTTP traffic to the API: 90% `GET /users/:id` (seeded ids) and 10% `POST /users`. Stages: ramp up, steady, 3× spike, hold, ramp down (150 virtual users at peak, 2.5 minutes). Options are set with `-e`:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SKEW` | `uniform` | `uniform`: all ids equally likely. `zipf`: a few ids get most reads. `hot` (optional extension): 30% of reads hit one key |
+| `READ_RATIO` | `0.9` | Fraction of reads |
+| `PEAK_VUS` | `50` | Steady-state users (spike is 3×) |
+| `N` | `1000000` | Seeded rows (ids 1..N) |
+
+```powershell
+mkdir results
+
+# quick check
+k6 run --vus 5 --duration 10s loadtest/k6.js
+
+# full run
+k6 run --summary-export results/consistent-4shards-uniform.json loadtest/k6.js
+
+# skewed keys
+k6 run -e SKEW=zipf --summary-export results/consistent-4shards-zipf.json loadtest/k6.js
+
+# per-shard load (restart the API before each run to reset the counters)
+(Invoke-RestMethod http://localhost:3000/metrics) -split "`n" | Select-String "shard_queries_total"
+```
+
+### Step 6: compare 1 DB vs 2 vs 4 shards
+
+For each setup, use the same strategy, the same seed and the same k6 script:
+
+1. Start only the containers needed (`docker compose stop ...` then `up -d pg-baseline` / `shard0 shard1` / all four shards).
+2. Set `SHARD_URLS` in `.env` for that setup.
+3. Truncate the databases in use and `npm run seed`.
+4. Restart the API, then run k6 and save `results/<setup>-uniform.json`.
+5. Repeat each run at least twice. Run-to-run noise on a laptop is about 10%.
+
+### Optional: live dashboards (Prometheus + Grafana)
+
+Add `prometheus` and `grafana` services to `docker-compose.yml` (Grafana on port 3001) and a `monitoring/prometheus.yml` that scrapes `host.docker.internal:3000`. Useful panels:
+
+- `sum by (shard) (rate(shard_queries_total[15s]))`: queries/s per shard (balance or hot shard)
+- `histogram_quantile(0.95, sum by (le, shard) (rate(shard_query_seconds_bucket[30s])))`: p95 DB latency per shard
+- `rate(process_cpu_seconds_total[15s])` and `nodejs_eventloop_lag_seconds`: is Node the bottleneck?
+
+k6 can push its own metrics with `-o experimental-prometheus-rw` (Prometheus started with `--web.enable-remote-write-receiver`).
 
 ### Stopping
 
@@ -177,9 +228,9 @@ docker compose down -v   # remove everything INCLUDING data
 
 ### Inspecting data in pgAdmin 4
 
-Register each shard as a server: Host `127.0.0.1`, Port 5441-5444, Maintenance database `app`, Username `app`, Password `app`. Use `SELECT count(*) FROM users;` for real row counts. Avoid "View All Rows" on large tables.
+Register each shard as a server: Host `127.0.0.1`, Port 5441-5444 (5440 for the baseline), Maintenance database `app`, Username `app`, Password `app`. Use `SELECT count(*) FROM users;` for real row counts. Avoid "View All Rows" on large tables.
 
-## Results so far
+## Results so far (local laptop)
 
 ### Hash vs consistent hashing: data distribution
 
@@ -194,14 +245,41 @@ Register each shard as a server: Host `127.0.0.1`, Port 5441-5444, Maintenance d
 | Largest ÷ smallest shard | 1.005× | 1.089× |
 | Table size per shard | 26 MB | 25-27 MB |
 
+- Hash routing spreads rows almost perfectly evenly.
+- Consistent hashing is less even (about 9% between the biggest and smallest shard). More virtual nodes tighten the split, at the cost of a larger ring and slightly slower lookups.
+- Consistent hashing's advantage is **rebalancing**: with `hash % N`, going from 4 to 5 shards remaps about 80% of keys; with consistent hashing, about 20% (≈1/N). To be measured in Step 7.
+
+### Load test: 4 shards, consistent hashing, 150 peak users
+
+| | Uniform keys | Zipf keys |
+|---|---|---|
+| Requests | 96,992 | 108,245 |
+| Requests/s (avg) | 646 | 721 |
+| Avg latency | 111.7 ms | 100.0 ms |
+| Read p95 | 260 ms | 246 ms |
+| Write p95 | 303 ms | 308 ms |
+| Errors | 0% | 0% |
+
+Share of queries per shard:
+
+| Shard | Seeded data | Uniform traffic | Zipf traffic |
+|---|---|---|---|
+| 0 | 23.9% | 23.7% | 28.2% |
+| 1 | 25.7% | 25.9% | 22.4% |
+| 2 | 24.3% | 24.3% | 21.2% |
+| 3 | 26.1% | 26.1% | 28.2% |
+| Busiest ÷ quietest | 1.09× | 1.10× | 1.34× |
+
 Findings:
 
-- Hash routing spreads rows almost perfectly evenly.
-- Consistent hashing is less even (about 9% between the biggest and smallest shard). Virtual nodes smooth the ring, so more vnodes tighten the split, at the cost of a larger ring and slightly slower lookups.
-- Consistent hashing's advantage is not the split but **rebalancing**: with `hash % N`, going from 4 to 5 shards remaps about 80% of keys; with consistent hashing, about 20% (≈1/N). This will be measured in Step 7.
-- At 1M rows each shard is ~26 MB and fits entirely in RAM, so 1 DB vs 4 shards will perform alike locally. The gap appears when the data exceeds one node's memory (roughly 10M+ rows: ~1 GB on a single DB vs ~260 MB per shard).
+- With uniform keys, each shard's share of traffic matches its share of the data, so consistent hashing's ring imbalance becomes real load imbalance.
+- Skewed (Zipf) reads concentrate on the shards that own the popular ids: two shards took ~28% each versus ~21% for the others. **Sharding balances where data is stored, not how often each row is read.**
+- There was no latency penalty locally: no shard was near saturation, hot rows are cached, and all components share one laptop's CPU. A hot shard only hurts once it becomes the limiting resource.
+- Mitigations for a hot shard: cache hot keys (Redis), read replicas for the hot shard, splitting a hot key, or a shard key with less skewed access.
 
-Dataset size guide (users table with primary key index):
+### Dataset size guide
+
+Users table with primary key index:
 
 | Rows | Baseline (1 DB) | Per shard (4 shards) |
 |---|---|---|
@@ -209,17 +287,28 @@ Dataset size guide (users table with primary key index):
 | 10M | ~1 GB | ~260 MB |
 | 50M | ~5 GB | ~1.3 GB |
 
+At 1M rows each shard fits entirely in RAM, so a single DB and four shards perform alike locally. The gap appears when the data exceeds one node's memory (roughly 10M+ rows), which is what the cloud runs are for.
+
+### Step 6 results (to fill in)
+
+| Setup | Req/s | Read p95 | Write p95 | Errors |
+|---|---|---|---|---|
+| 1 DB | | | | |
+| 2 shards | | | | |
+| 4 shards | 646 | 260 ms | 303 ms | 0% |
+
 ## Troubleshooting
 
 - **`TS5108: moduleResolution=node10 has been removed`:** newer TypeScript. Use `"module": "node16"`, `"moduleResolution": "node16"` and `"types": ["node"]` in `tsconfig.json`.
 - **Invalid JSON body from `curl.exe` in PowerShell:** PowerShell mangles escaped quotes. Use `Invoke-RestMethod` with `ConvertTo-Json`.
 - **`params/id must match pattern`:** a non-numeric id was sent (e.g. a pasted placeholder). Use `$r.id` from the POST response.
 - **Seed fails with `duplicate key value violates unique constraint "users_pkey"`:** rows from an earlier seed are still there. Truncate every shard (loop above) and re-run `npm run seed`. The `--truncate` flag may not reach the script through npm on PowerShell.
-- **Reads return 404 after switching strategy:** the data was seeded under a different strategy than the API is running. Truncate, re-seed and restart the API.
+- **Reads return 404 after switching strategy or shard list:** the data was seeded under a different configuration than the API is running. Truncate, re-seed and restart the API.
+- **Metrics counters include earlier traffic:** counters are cumulative since the API started. Restart the API before each run.
 - **pgAdmin "password authentication failed":** the shard password is `app`, set in `docker-compose.yml`. It is read only when a volume is first created.
 - **pgAdmin can't connect to port 5440:** the baseline container isn't running. Start it with `docker compose up -d pg-baseline`.
 - **Docker Desktop "not enough disk space" on a low C: drive:** install with separate folders on another drive, e.g. `--installation-dir=E:\DockerApp --wsl-default-data-root=E:\DockerData` (the data root must not be inside the install dir) and set `TEMP`/`TMP` to a folder on that drive for the install.
-- **`docker` not recognized after install:** open a new terminal; if still missing, add Docker's `resources\bin` folder to the user PATH.
+- **`docker` or `k6` not recognized after install:** open a new terminal; if still missing, add the install folder to the user PATH.
 
 ## Roadmap
 
@@ -227,14 +316,14 @@ Dataset size guide (users table with primary key index):
 - [x] Step 2: Infrastructure: 4 empty Postgres shards via Docker Compose
 - [x] Step 3: Smoke test: routing verified, rows spread evenly
 - [x] Step 4: Seed 1M rows through the router with batched `COPY`; compared hash vs consistent distribution
-- [ ] Step 5: Baseline load test (1 DB) with k6, recording throughput and p50/p95/p99 latency
-- [ ] Step 6: Load test with 2 and 4 shards
-- [ ] Step 7: Experiments: hash vs consistent hash vs range; uniform vs skewed (Zipf) keys to create a hot shard; measure keys moved when adding a shard
+- [x] Step 5: k6 load test implemented; 4-shard runs recorded (uniform and Zipf keys)
+- [ ] Step 6: Compare 1 DB vs 2 shards vs 4 shards under identical data and load
+- [ ] Step 7: Experiments: hash vs consistent hash vs range; hot-key skew; measure keys moved when adding a shard; vnode count vs balance
 - [ ] Step 8: Results: graphs, per-shard load charts, trade-off analysis
-- [ ] Optional: Prometheus + Grafana dashboards; online resharding; seed 10-50M rows on cloud VMs
+- [ ] Optional: Grafana dashboards; online resharding; 10-50M rows on cloud VMs
 
 ## Notes
 
 - Run local benchmarks only to check correctness. 4 Postgres containers, Node and k6 all share one machine's CPU, so real scaling results come from separate cloud VMs.
-- Run several API instances behind a load balancer in the cloud, or the single Node process becomes the bottleneck and hides the shard differences.
+- The API is a single Node process. In the cloud, run several instances behind a load balancer, or Node itself becomes the bottleneck and hides the shard differences.
 - Use synthetic data for controlled experiments (uniform vs skewed keys), and one real dataset (e.g. NYC taxi or Amazon Reviews) for a realistic final demo.
