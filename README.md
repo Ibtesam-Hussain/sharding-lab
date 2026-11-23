@@ -197,15 +197,22 @@ k6 run -e SKEW=zipf --summary-export results/consistent-4shards-zipf.json loadte
 (Invoke-RestMethod http://localhost:3000/metrics) -split "`n" | Select-String "shard_queries_total"
 ```
 
-### Step 6: compare 1 DB vs 2 vs 4 shards
+### Step 6: 1 DB vs 2 vs 4 shards (1M rows, consistent hashing, uniform keys, 150 peak users)
 
-For each setup, use the same strategy, the same seed and the same k6 script:
+Two runs per setup, fresh seed per setup. Averages shown; raw runs in `results/`.
 
-1. Start only the containers needed (`docker compose stop ...` then `up -d pg-baseline` / `shard0 shard1` / all four shards).
-2. Set `SHARD_URLS` in `.env` for that setup.
-3. Truncate the databases in use and `npm run seed`.
-4. Restart the API, then run k6 and save `results/<setup>-uniform.json`.
-5. Repeat each run at least twice. Run-to-run noise on a laptop is about 10%.
+| Setup | Req/s | Read p95 | Write p95 | Errors |
+|---|---|---|---|---|
+| 1 DB | 752 | 209 ms | 380 ms | 0% |
+| 2 shards | 818 | 206 ms | 422 ms | 0% |
+| 4 shards | 856 | 183 ms | 330 ms | 0% |
+
+Findings:
+
+- Throughput rises modestly with shard count (+14% from 1 DB to 4 shards) and read p95 falls ~12%.
+- The effect is small and close to run-to-run noise (4-8% between identical runs). Write p95 is too noisy to rank.
+- At 1M rows (~104 MB) one database fits in memory, and k6, the single-process Node API and all databases share one laptop's CPU, so the single node is not the bottleneck. Sharding pays off when a node is saturated (data larger than RAM, CPU or disk limits), which is the cloud experiment.
+- Per-shard traffic follows each shard's share of the data (1.08× busiest vs quietest in the 4-shard run).
 
 ### Optional: live dashboards (Prometheus + Grafana)
 
@@ -289,13 +296,13 @@ Users table with primary key index:
 
 At 1M rows each shard fits entirely in RAM, so a single DB and four shards perform alike locally. The gap appears when the data exceeds one node's memory (roughly 10M+ rows), which is what the cloud runs are for.
 
-### Step 6 results (to fill in)
+### Step 6 results 
 
 | Setup | Req/s | Read p95 | Write p95 | Errors |
 |---|---|---|---|---|
-| 1 DB | | | | |
-| 2 shards | | | | |
-| 4 shards | 646 | 260 ms | 303 ms | 0% |
+| 1 DB | 752 | 209 ms | 380 ms | 0% |
+| 2 shards | 818 | 206 ms | 422 ms | 0% |
+| 4 shards | 856 | 183 ms | 330 ms | 0% |
 
 ## Troubleshooting
 
@@ -317,7 +324,7 @@ At 1M rows each shard fits entirely in RAM, so a single DB and four shards perfo
 - [x] Step 3: Smoke test: routing verified, rows spread evenly
 - [x] Step 4: Seed 1M rows through the router with batched `COPY`; compared hash vs consistent distribution
 - [x] Step 5: k6 load test implemented; 4-shard runs recorded (uniform and Zipf keys)
-- [ ] Step 6: Compare 1 DB vs 2 shards vs 4 shards under identical data and load
+- [x] Step 6: Compare 1 DB vs 2 shards vs 4 shards under identical data and load
 - [ ] Step 7: Experiments: hash vs consistent hash vs range; hot-key skew; measure keys moved when adding a shard; vnode count vs balance
 - [ ] Step 8: Results: graphs, per-shard load charts, trade-off analysis
 - [ ] Optional: Grafana dashboards; online resharding; 10-50M rows on cloud VMs
