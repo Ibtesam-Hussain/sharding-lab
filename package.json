@@ -7,7 +7,9 @@
     "dev": "node --env-file=.env --import tsx src/server.ts",
     "build": "tsc",
     "start": "node --env-file=.env dist/server.js",
-    "seed": "node --env-file=.env --import tsx scripts/seed.ts"
+    "seed": "node --env-file=.env --import tsx scripts/seed.ts",
+    "sim": "node --env-file=.env --import tsx scripts/rebalance-sim.ts",
+    "strategy-sim": "node --env-file=.env --import tsx scripts/strategy-sim.ts"
   },
   "keywords": [],
   "author": "",
