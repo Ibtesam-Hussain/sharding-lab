@@ -216,6 +216,54 @@ Findings:
 - At 1M rows (~104 MB) one database fits in memory, and k6, the single-process Node API and all databases share one laptop's CPU, so the single node is not the bottleneck. Sharding pays off when a node is saturated (data larger than RAM, CPU or disk limits), which is the cloud experiment.
 - Per-shard traffic follows each shard's share of the data (1.08× busiest vs quietest in the 4-shard run).
 
+
+
+### Step 7.1: Keys moved when the shard count changes (1M keys)
+
+| Change | Strategy | Keys moved | Ideal | Reshuffled between existing shards |
+|---|---|---|---|---|
+| 4 → 5 shards | hash | 79.98% | 20% | 60.06% |
+| 4 → 5 shards | consistent | 19.62% | 20% | 0.00% |
+| 4 → 3 shards | hash | 74.93% | 25% | 49.94% |
+| 4 → 3 shards | consistent | 26.05% | 25% | 0.00% |
+
+Hash routing moves about 4× more data than necessary when the shard count changes, and a large share of that moves between shards that still exist. Consistent hashing moves only the new (or removed) shard's slice and never reshuffles surviving shards.
+
+### Step 7.2: Virtual nodes vs balance (4 shards, 1M keys)
+
+| vnodes | Busiest ÷ quietest | Std dev | Keys moved 4 → 5 |
+|---|---|---|---|
+| 1 | 5.39× | 55.5% | 3.19% |
+| 10 | 2.27× | 30.3% | 27.97% |
+| 50 | 1.26× | 8.5% | 18.76% |
+| 150 | 1.09× | 3.6% | 19.62% |
+| 500 | 1.08× | 3.2% | 20.02% |
+| 1000 | 1.05× | 1.7% | 20.66% |
+| hash (reference) | 1.005× | 0.2% | 79.98% |
+
+Balance improves sharply up to ~50-150 vnodes, then with diminishing returns. Too few vnodes give both a lopsided split and unpredictable rebalancing. Lookup cost stayed flat (261-411 ns per lookup, dominated by the hash itself), so large vnode counts are effectively free.
+
+### Step 7.3 and 7.4: Routing strategies under different traffic (4 shards, 1M ids, offline simulation)
+
+Share of load on the busiest shard (ideal: 25%):
+
+| Scenario | Hash | Consistent | Range | Directory |
+|---|---|---|---|---|
+| Seeded data | 25.1% | 26.0% | 25.0% | 25.0% |
+| New writes (ids above 10^12) | 25.1% | 26.0% | 100% | 25.1% |
+| Uniform reads | 25.1% | 26.0% | 25.1% | 25.0% |
+| Zipf reads | 29.6% | 28.6% | 90.0% | 60.7% |
+| Hot key (30% of reads on id 1) | 47.5% | 48.1% | 47.5% | 47.5% |
+
+Findings:
+
+- Range partitioning balances seeded data perfectly but sends every new insert to the last shard and concentrates popular low ids on shard 0 (90% under Zipf).
+- A directory keeps neighbouring ids together, so a hot head of the id space lands on one shard (60.7% under Zipf). It can be fixed by moving buckets, at the cost of a migration.
+- Hash and consistent routing scatter popular ids, keeping Zipf skew mild (~29%).
+- No routing strategy fixes a single extremely hot key (~47.5% on one shard in every case). That needs caching, replicas or key splitting.
+- The simulation reproduces the real k6 per-shard counters (e.g. consistent Zipf: 28.2 / 22.4 / 21.2 / 28.2 measured vs 28.6 / 22.2 / 20.7 / 28.5 simulated).
+
+
 ### Optional: live dashboards (Prometheus + Grafana)
 
 Add `prometheus` and `grafana` services to `docker-compose.yml` (Grafana on port 3001) and a `monitoring/prometheus.yml` that scrapes `host.docker.internal:3000`. Useful panels:
