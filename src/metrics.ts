@@ -17,7 +17,8 @@ const latency = new Histogram({
 
 export async function track<T>(
   shard: number,
-  op: 'read' | 'write',
+  //op: 'read' | 'write', //before step 7 experimentation
+  op: 'read' | 'write' | 'scan',  //step 7 implementation
   fn: () => Promise<T>
 ): Promise<T> {
   const labels = { shard: String(shard), op };
