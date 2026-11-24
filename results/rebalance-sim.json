@@ -1,0 +1,105 @@
+{
+  "keys": 1000000,
+  "experiment1": [
+    {
+      "strategy": "hash",
+      "change": "4 -> 5 (add a shard)",
+      "keys moved": "79.98%",
+      "ideal minimum": "20.00%",
+      "reshuffled between existing shards": "60.06%"
+    },
+    {
+      "strategy": "hash",
+      "change": "4 -> 3 (remove a shard)",
+      "keys moved": "74.93%",
+      "ideal minimum": "25.00%",
+      "reshuffled between existing shards": "49.94%"
+    },
+    {
+      "strategy": "consistent",
+      "change": "4 -> 5 (add a shard)",
+      "keys moved": "19.62%",
+      "ideal minimum": "20.00%",
+      "reshuffled between existing shards": "0.00%"
+    },
+    {
+      "strategy": "consistent",
+      "change": "4 -> 3 (remove a shard)",
+      "keys moved": "26.05%",
+      "ideal minimum": "25.00%",
+      "reshuffled between existing shards": "0.00%"
+    }
+  ],
+  "experiment2": [
+    {
+      "strategy": "hash (reference)",
+      "vnodes": "-",
+      "ring points": "-",
+      "shares % (s0 / s1 / s2 / s3)": "25.0 / 24.9 / 25.1 / 25.0",
+      "busiest / quietest": "1.005",
+      "std dev % of mean": "0.17",
+      "keys moved 4->5": "79.98%",
+      "ns per lookup": "282"
+    },
+    {
+      "strategy": "consistent",
+      "vnodes": "1",
+      "ring points": "4",
+      "shares % (s0 / s1 / s2 / s3)": "47.0 / 8.7 / 20.9 / 23.3",
+      "busiest / quietest": "5.385",
+      "std dev % of mean": "55.48",
+      "keys moved 4->5": "3.19%",
+      "ns per lookup": "261"
+    },
+    {
+      "strategy": "consistent",
+      "vnodes": "10",
+      "ring points": "40",
+      "shares % (s0 / s1 / s2 / s3)": "34.7 / 20.5 / 29.5 / 15.3",
+      "busiest / quietest": "2.270",
+      "std dev % of mean": "30.26",
+      "keys moved 4->5": "27.97%",
+      "ns per lookup": "268"
+    },
+    {
+      "strategy": "consistent",
+      "vnodes": "50",
+      "ring points": "200",
+      "shares % (s0 / s1 / s2 / s3)": "21.6 / 27.2 / 24.8 / 26.4",
+      "busiest / quietest": "1.257",
+      "std dev % of mean": "8.52",
+      "keys moved 4->5": "18.76%",
+      "ns per lookup": "309"
+    },
+    {
+      "strategy": "consistent",
+      "vnodes": "150",
+      "ring points": "600",
+      "shares % (s0 / s1 / s2 / s3)": "23.9 / 25.7 / 24.3 / 26.0",
+      "busiest / quietest": "1.089",
+      "std dev % of mean": "3.64",
+      "keys moved 4->5": "19.62%",
+      "ns per lookup": "379"
+    },
+    {
+      "strategy": "consistent",
+      "vnodes": "500",
+      "ring points": "2000",
+      "shares % (s0 / s1 / s2 / s3)": "25.9 / 25.6 / 24.5 / 24.0",
+      "busiest / quietest": "1.081",
+      "std dev % of mean": "3.17",
+      "keys moved 4->5": "20.02%",
+      "ns per lookup": "411"
+    },
+    {
+      "strategy": "consistent",
+      "vnodes": "1000",
+      "ring points": "4000",
+      "shares % (s0 / s1 / s2 / s3)": "24.7 / 25.2 / 24.5 / 25.6",
+      "busiest / quietest": "1.045",
+      "std dev % of mean": "1.74",
+      "keys moved 4->5": "20.66%",
+      "ns per lookup": "354"
+    }
+  ]
+}
