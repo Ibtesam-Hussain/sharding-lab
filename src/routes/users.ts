@@ -62,4 +62,78 @@ export async function userRoutes(app: FastifyInstance) {
       return reply.code(201).send({ id, shard });
     }
   );
+
+
+
+  // ---- 7.5: queries that do not map to a single shard key ----
+
+  const allShards = () => Array.from({ length: pools.length }, (_, i) => i);
+
+  // Ask the given shards in parallel, then merge by id and cut to the limit
+  async function scatter(shards: number[], sql: string, params: unknown[], limit: number) {
+    const results = await Promise.all(
+      shards.map((s) => track(s, 'scan', () => pools[s].query(sql, params)))
+    );
+    const rows = results.flatMap((r) => r.rows);
+    rows.sort((a, b) => Number(a.id) - Number(b.id)); // ids stay below 2^53, so Number is safe
+    return rows.slice(0, limit);
+  }
+
+  // Filter on a non-shard-key column: every shard must be asked (scatter-gather)
+  app.get<{ Querystring: { country: string; limit?: number } }>(
+    '/users',
+    {
+      schema: {
+        querystring: {
+          type: 'object',
+          properties: {
+            country: { type: 'string' },
+            limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
+          },
+          required: ['country'],
+        },
+      },
+    },
+    async (req) => {
+      const { country, limit = 50 } = req.query;
+      const shards = allShards();
+      const users = await scatter(
+        shards,
+        'SELECT id, name, email, country FROM users WHERE country = $1 ORDER BY id LIMIT $2',
+        [country, limit],
+        limit
+      );
+      return { shardsQueried: shards.length, count: users.length, users };
+    }
+  );
+
+  // Id range: only the strategies that can narrow it down ask fewer shards
+  app.get<{ Querystring: { from: number; to: number; limit?: number } }>(
+    '/users/range',
+    {
+      schema: {
+        querystring: {
+          type: 'object',
+          properties: {
+            from: { type: 'integer', minimum: 1 },
+            to: { type: 'integer', minimum: 1 },
+            limit: { type: 'integer', minimum: 1, maximum: 500, default: 50 },
+          },
+          required: ['from', 'to'],
+        },
+      },
+    },
+    async (req, reply) => {
+      const { from, to, limit = 50 } = req.query;
+      if (to < from) return reply.code(400).send({ error: 'to must be >= from' });
+      const shards = router.shardsForRange ? router.shardsForRange(from, to) : allShards();
+      const users = await scatter(
+        shards,
+        'SELECT id, name, email, country FROM users WHERE id BETWEEN $1 AND $2 ORDER BY id LIMIT $3',
+        [from, to, limit],
+        limit
+      );
+      return { shardsQueried: shards.length, count: users.length, users };
+    }
+  );
 }
