@@ -13,7 +13,7 @@ All numbers are from a single laptop (see [Limitations](#limitations)), averaged
 5. **Sharding balances data, not traffic.** Under Zipf-skewed reads the busiest shard took 29-30% with hash/consistent, 60.7% with a directory and 90% with range. A single hot key puts ~47.5% on one shard under every strategy.
 6. **Range partitioning wins range queries and loses elsewhere.** It gave 2.5× the throughput of hash on an id-range query (1 shard touched instead of 4), but sent 100% of new writes to one shard.
 
-![Sharding helps some queries and hurts others](./scripts/docs/charts/lookup-vs-scatter.png)
+![Sharding helps some queries and hurts others](./docs/charts/lookup-vs-scatter.png)
 
 ## Why sharding
 
@@ -323,7 +323,7 @@ Two runs per setup, fresh seed per setup. Averages shown; raw runs in `results/`
 | 2 shards | 818 | 206 ms | 422 ms | 0% |
 | 4 shards | 856 | 183 ms | 330 ms | 0% |
 
-![Step 6](./scripts/docs/charts/step6-lookups.png)
+![Step 6](./docs/charts/step6-lookups.png)
 
 Findings:
 
@@ -341,7 +341,7 @@ Findings:
 | 4 → 3 shards | hash | 74.93% | 25% | 49.94% |
 | 4 → 3 shards | consistent | 26.05% | 25% | 0.00% |
 
-![Keys moved](./scripts/docs/charts/keys-moved.png)
+![Keys moved](./docs/charts/keys-moved.png)
 
 Hash routing moves about 4× more data than necessary when the shard count changes, and a large share of that moves between shards that still exist. Consistent hashing moves only the new (or removed) shard's slice and never reshuffles surviving shards.
 
@@ -357,7 +357,7 @@ Hash routing moves about 4× more data than necessary when the shard count chang
 | 1000 | 1.05× | 1.7% | 20.66% |
 | hash (reference) | 1.005× | 0.2% | 79.98% |
 
-![Virtual nodes](./scripts/docs/charts/vnodes-balance.png)
+![Virtual nodes](./docs/charts/vnodes-balance.png)
 
 Balance improves sharply up to ~50-150 vnodes, then with diminishing returns. Too few vnodes give both a lopsided split and unpredictable rebalancing. Lookup cost stayed flat (261-411 ns per lookup, dominated by the hash itself), so large vnode counts are effectively free.
 
@@ -373,7 +373,7 @@ Share of load on the busiest shard (ideal: 25%):
 | Zipf reads | 29.6% | 28.6% | 90.0% | 60.7% |
 | Hot key (30% of reads on id 1) | 47.5% | 48.1% | 47.5% | 47.5% |
 
-![Strategies under skew](./scripts/docs/charts/strategy-scenarios.png)
+![Strategies under skew](./docs/charts/strategy-scenarios.png)
 
 Findings:
 
@@ -420,7 +420,7 @@ k6 run -e MODE=range --summary-export results/scatter-range-hash-a.json loadtest
 | range | 735 | 222 ms | 99 ms | 1.00 |
 | directory | 449 | 423 ms | 161 ms | 2.00 |
 
-![Range query](./scripts/docs/charts/range-query.png)
+![Range query](./docs/charts/range-query.png)
 
 Findings:
 
